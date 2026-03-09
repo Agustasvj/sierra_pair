@@ -1,5 +1,5 @@
 const express = require('express');
-const { makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs').promises;
 const path = require('path');
@@ -10,7 +10,6 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve the pairing page
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -18,170 +17,109 @@ app.get('/', (req, res) => {
     <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-      <title>Sierra MD - Pairing Code</title>
+      <title>Sierra MD Pairing - Full Session</title>
       <style>
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          background: #111;
-          color: #e0e0e0;
-          margin: 0;
-          padding: 20px;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-        }
-        .container {
-          max-width: 480px;
-          width: 100%;
-          background: #1e1e1e;
-          padding: 32px;
-          border-radius: 16px;
-          box-shadow: 0 4px 30px rgba(0,0,0,0.5);
-        }
-        h1 {
-          color: #25D366;
-          text-align: center;
-          margin-bottom: 8px;
-        }
-        p.subtitle {
-          text-align: center;
-          color: #aaa;
-          margin-bottom: 32px;
-        }
-        label {
-          display: block;
-          margin: 16px 0 8px;
-          font-weight: 500;
-        }
-        input {
-          width: 100%;
-          padding: 14px;
-          font-size: 18px;
-          border: 1px solid #444;
-          border-radius: 8px;
-          background: #2a2a2a;
-          color: white;
-          box-sizing: border-box;
-        }
-        button {
-          width: 100%;
-          padding: 16px;
-          font-size: 18px;
-          background: #25D366;
-          color: white;
-          border: none;
-          border-radius: 8px;
-          cursor: pointer;
-          margin-top: 24px;
-          font-weight: bold;
-        }
-        button:hover {
-          background: #128C7E;
-        }
-        #result {
-          margin-top: 32px;
-          padding: 20px;
-          background: #2a2a2a;
-          border-radius: 12px;
-          white-space: pre-wrap;
-          line-height: 1.5;
-        }
-        .code {
-          font-size: 2.4em;
-          font-weight: bold;
-          color: #25D366;
-          letter-spacing: 8px;
-          text-align: center;
-          margin: 16px 0;
-        }
-        .warning {
-          color: #ff9800;
-          font-size: 0.95em;
-          margin-top: 16px;
-        }
+        body { font-family: Arial, sans-serif; background:#111; color:#eee; margin:0; padding:20px; text-align:center; }
+        .box { max-width:600px; margin:0 auto; background:#1e1e1e; padding:30px; border-radius:12px; }
+        h1 { color:#25D366; }
+        input { width:100%; padding:14px; font-size:18px; margin:10px 0; border-radius:8px; border:1px solid #444; background:#2a2a2a; color:white; }
+        button { background:#25D366; color:white; border:none; padding:16px; font-size:18px; width:100%; border-radius:8px; cursor:pointer; }
+        #status { margin:20px 0; padding:15px; background:#2a2a2a; border-radius:8px; min-height:100px; white-space:pre-wrap; word-break:break-all; }
+        .code { font-size:2.5em; font-weight:bold; color:#25D366; letter-spacing:6px; margin:20px 0; }
+        textarea { width:100%; height:180px; background:#222; color:#0f0; font-family:monospace; padding:12px; border-radius:8px; border:1px solid #444; }
       </style>
     </head>
     <body>
-      <div class="container">
-        <h1>Sierra MD</h1>
-        <p class="subtitle">Generate WhatsApp Pairing Code</p>
-
-        <form id="pairForm">
-          <label for="phone">Phone Number (international, no +)</label>
-          <input
-            type="tel"
-            id="phone"
-            placeholder="254712345678"
-            pattern="[0-9]{9,15}"
-            required
-            title="Enter phone number without + or spaces"
-          />
-          <button type="submit">Get Pairing Code</button>
-        </form>
-
-        <div id="result"></div>
+      <div class="box">
+        <h1>Sierra MD Pairing</h1>
+        <p>Enter your phone number (no +, e.g. 254712345678)</p>
+        
+        <input type="tel" id="phone" placeholder="254712345678" pattern="[0-9]{9,15}" required />
+        <button onclick="startPairing()">Generate Code & Wait for Pairing</button>
+        
+        <div id="status">Waiting...</div>
+        <div id="codeDisplay" style="display:none;">
+          <p>Enter this code in WhatsApp → Linked Devices → Link with phone number</p>
+          <div class="code" id="pairCode"></div>
+        </div>
+        <textarea id="credsOutput" placeholder="Full base64 session will appear here after successful pairing" readonly></textarea>
       </div>
 
       <script>
-        const form = document.getElementById('pairForm');
-        const result = document.getElementById('result');
+        let socket = null;
 
-        form.addEventListener('submit', async (e) => {
-          e.preventDefault();
+        async function startPairing() {
           const phone = document.getElementById('phone').value.trim();
+          const status = document.getElementById('status');
+          const codeDiv = document.getElementById('codeDisplay');
+          const codeEl = document.getElementById('pairCode');
+          const credsArea = document.getElementById('credsOutput');
 
           if (!phone.match(/^[0-9]{9,15}$/)) {
-            result.innerHTML = '<p style="color:#f44336;">Invalid number format.</p>';
+            status.innerHTML = '<span style="color:#f44336;">Invalid phone number</span>';
             return;
           }
 
-          result.innerHTML = '<p>Generating code... please wait.</p>';
+          status.innerHTML = 'Requesting pairing code...';
+          credsArea.value = '';
 
           try {
-            const response = await fetch('/api/pair', {
+            const res = await fetch('/api/start-pair', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ phone })
             });
 
-            const data = await response.json();
+            const data = await res.json();
 
             if (data.error) {
-              result.innerHTML = \`<p style="color:#f44336;">Error: \${data.error}</p>\`;
-            } else {
-              result.innerHTML = \`
-                <p><strong>Pairing Code (8 digits):</strong></p>
-                <div class="code">\${data.code}</div>
-                <p>Open WhatsApp on your phone:</p>
-                <ol>
-                  <li>Settings → Linked Devices</li>
-                  <li>Link with phone number</li>
-                  <li>Enter the code above</li>
-                </ol>
-                <p class="warning">Code expires soon — use it immediately!</p>
-              \`;
+              status.innerHTML = '<span style="color:#f44336;">Error: ' + data.error + '</span>';
+              return;
             }
+
+            codeEl.textContent = data.code;
+            codeDiv.style.display = 'block';
+            status.innerHTML = '<span style="color:#4caf50;">Code generated! Enter it in WhatsApp now.</span><br>Waiting for pairing to complete...';
+
+            // Poll for completion
+            const interval = setInterval(async () => {
+              const check = await fetch('/api/check-pair?session=' + data.sessionId);
+              const result = await check.json();
+
+              if (result.status === 'success') {
+                clearInterval(interval);
+                status.innerHTML = '<span style="color:#4caf50;">Pairing successful!</span>';
+                credsArea.value = result.credsBase64;
+                credsArea.select();
+                status.innerHTML += '<br><strong>Copy the above base64 string and set it as SESSION_ID in Render env vars.</strong>';
+              } else if (result.status === 'failed') {
+                clearInterval(interval);
+                status.innerHTML = '<span style="color:#f44336;">Pairing failed: ' + (result.error || 'unknown') + '</span>';
+              }
+              // else still waiting
+            }, 5000);
+
           } catch (err) {
-            result.innerHTML = '<p style="color:#f44336;">Connection error. Try again.</p>';
+            status.innerHTML = '<span style="color:#f44336;">Connection failed</span>';
           }
-        });
+        }
       </script>
     </body>
     </html>
   `);
 });
 
-// API endpoint to generate pairing code
-app.post('/api/pair', async (req, res) => {
+// Start pairing and return code + session ID for polling
+app.post('/api/start-pair', async (req, res) => {
   const { phone } = req.body;
-
   if (!phone || !/^\d{9,15}$/.test(phone)) {
-    return res.status(400).json({ error: 'Invalid phone number format (9–15 digits, no +)' });
+    return res.status(400).json({ error: 'Invalid phone number' });
   }
 
+  const sessionId = Date.now().toString(); // unique per attempt
+  const sessionPath = path.join(__dirname, 'temp_pair', sessionId);
+
   try {
-    // Temporary folder for pairing attempt
-    const sessionPath = path.join(__dirname, 'temp_pair_auth');
     await fs.mkdir(sessionPath, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -189,31 +127,57 @@ app.post('/api/pair', async (req, res) => {
     const sock = makeWASocket({
       logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
-      browser: ['Sierra Pairing', 'Chrome', '126.0'],
+      browser: ['Sierra Pair', 'Chrome', '120.0'],
       auth: state
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Request pairing code
     const code = await sock.requestPairingCode(phone);
 
-    // Clean up socket
-    sock.end();
+    // Keep socket alive until paired or timeout
+    const timeout = setTimeout(() => sock.end(), 5 * 60 * 1000); // 5 min max
 
-    // Optional: remove temp folder after use
-    // await fs.rm(sessionPath, { recursive: true, force: true }).catch(() => {});
+    sock.ev.on('connection.update', (update) => {
+      if (update.connection === 'open') {
+        clearTimeout(timeout);
+        sock.end();
+        // Session is now saved in sessionPath/creds.json
+      }
+    });
 
-    res.json({ code });
+    res.json({ code, sessionId });
   } catch (err) {
-    console.error('Pairing error:', err);
-    let msg = 'Failed to generate code';
-    if (err.message.includes('rate-overlimit')) msg = 'Rate limit reached — try again later';
-    if (err.message.includes('already paired')) msg = 'This number is already linked';
-    res.status(500).json({ error: msg });
+    res.status(500).json({ error: err.message || 'Failed to start pairing' });
+  }
+});
+
+// Check if pairing completed and return base64 creds
+app.get('/api/check-pair', async (req, res) => {
+  const { session } = req.query;
+  if (!session) return res.status(400).json({ error: 'Missing session' });
+
+  const sessionPath = path.join(__dirname, 'temp_pair', session, 'creds.json');
+
+  try {
+    const credsExist = await fs.access(sessionPath).then(() => true).catch(() => false);
+
+    if (credsExist) {
+      const credsJson = await fs.readFile(sessionPath, 'utf-8');
+      const credsBase64 = Buffer.from(credsJson).toString('base64');
+
+      // Optional: clean up
+      // await fs.rm(path.dirname(sessionPath), { recursive: true, force: true });
+
+      res.json({ status: 'success', credsBase64 });
+    } else {
+      res.json({ status: 'waiting' });
+    }
+  } catch (err) {
+    res.json({ status: 'failed', error: err.message });
   }
 });
 
 app.listen(port, '0.0.0.0', () => {
-  console.log(`Pairing server running on port ${port}`);
+  console.log(`Pairing server on port ${port}`);
 });
