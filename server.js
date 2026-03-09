@@ -9,7 +9,6 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static('public')); // for static files if you add CSS/JS later
 
 // Serve the pairing page
 app.get('/', (req, res) => {
@@ -148,11 +147,11 @@ app.get('/', (req, res) => {
             const data = await response.json();
 
             if (data.error) {
-              result.innerHTML = `<p style="color:#f44336;">Error: ${data.error}</p>`;
+              result.innerHTML = \`<p style="color:#f44336;">Error: \${data.error}</p>\`;
             } else {
-              result.innerHTML = `
+              result.innerHTML = \`
                 <p><strong>Pairing Code (8 digits):</strong></p>
-                <div class="code">${data.code}</div>
+                <div class="code">\${data.code}</div>
                 <p>Open WhatsApp on your phone:</p>
                 <ol>
                   <li>Settings → Linked Devices</li>
@@ -160,7 +159,7 @@ app.get('/', (req, res) => {
                   <li>Enter the code above</li>
                 </ol>
                 <p class="warning">Code expires soon — use it immediately!</p>
-              `;
+              \`;
             }
           } catch (err) {
             result.innerHTML = '<p style="color:#f44336;">Connection error. Try again.</p>';
@@ -172,7 +171,7 @@ app.get('/', (req, res) => {
   `);
 });
 
-// API to generate pairing code
+// API endpoint to generate pairing code
 app.post('/api/pair', async (req, res) => {
   const { phone } = req.body;
 
@@ -199,8 +198,10 @@ app.post('/api/pair', async (req, res) => {
     // Request pairing code
     const code = await sock.requestPairingCode(phone);
 
-    // Clean up (optional — you can keep if you want to auto-connect later)
+    // Clean up socket
     sock.end();
+
+    // Optional: remove temp folder after use
     // await fs.rm(sessionPath, { recursive: true, force: true }).catch(() => {});
 
     res.json({ code });
