@@ -3,6 +3,8 @@ const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whis
 const pino = require('pino');
 const fs = require('fs').promises;
 const path = require('path');
+const axios = require('axios');
+const pn = require('awesome-phonenumber');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -10,75 +12,132 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve the pairing page
+// Pastebin API key from env
+const PASTEBIN_API_KEY = process.env.PASTEBIN_API_KEY || '';
+
+const MESSAGE = `
+*SESSION GENERATED SUCCESSFULLY* ✅
+
+*Gɪᴠᴇ ᴀ ꜱᴛᴀʀ ᴛᴏ ʀᴇᴘᴏ ꜰᴏʀ ᴄᴏᴜʀᴀɢᴇ* 🌟
+https://github.com/GlobalTechInfo/MEGA-MD
+
+*Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ ꜰᴏʀ ϙᴜᴇʀʏ* 💭
+https://t.me/Global_TechInfo
+https://whatsapp.com/channel/0029VagJIAr3bbVBCpEkAM07
+
+*Yᴏᴜ-ᴛᴜʙᴇ ᴛᴜᴛᴏʀɪᴀʟꜱ* 🪄 
+https://youtube.com/@GlobalTechInfo
+
+*MEGA-MD--WHATSAPP* 🥀
+`;
+
+async function uploadToPastebin(content, title = 'Untitled', format = 'json', privacy = '1') {
+  try {
+    const privacyMap = { '0': 0, '1': 1, '2': 2 };
+    const body = new URLSearchParams({
+      api_dev_key: PASTEBIN_API_KEY,
+      api_option: 'paste',
+      api_paste_code: content,
+      api_paste_name: title,
+      api_paste_format: format,
+      api_paste_private: String(privacyMap[privacy] || 1),
+      api_paste_expire_date: 'N',
+    });
+
+    const res = await axios.post('https://pastebin.com/api/api_post.php', body.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+
+    const text = res.data;
+    if (!text.startsWith('https://')) throw new Error(`Pastebin error: ${text}`);
+    const pasteId = text.split('/').pop();
+    return `GlobalTechInfo/MEGA-MD_${pasteId}`;
+  } catch (error) {
+    console.error('Pastebin upload failed:', error);
+    throw error;
+  }
+}
+
 app.get('/', (req, res) => {
   res.send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sierra MD Pairing</title>
-  <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #111; color: #eee; }
-    input { padding: 12px; font-size: 18px; width: 300px; margin: 10px 0; border-radius: 8px; border: 1px solid #444; background: #222; color: white; }
-    button { padding: 12px 24px; font-size: 18px; background: #25D366; color: white; border: none; border-radius: 8px; cursor: pointer; }
-    #result { margin-top: 30px; font-size: 18px; word-break: break-all; background: #1e1e1e; padding: 20px; border-radius: 12px; max-width: 600px; margin-left: auto; margin-right: auto; }
-  </style>
-</head>
-<body>
-  <h1>Sierra MD Pairing Code</h1>
-  <p>Enter your phone number (e.g. 254712345678)</p>
-  <input type="text" id="phone" placeholder="254712345678">
-  <br>
-  <button onclick="generateCode()">Generate Code</button>
-  <div id="result">Waiting...</div>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Sierra MD Pairing</title>
+      <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        input { padding: 10px; font-size: 16px; width: 300px; margin: 10px 0; }
+        button { padding: 10px 20px; font-size: 16px; }
+        #result { margin-top: 20px; font-size: 18px; word-break: break-all; }
+      </style>
+    </head>
+    <body>
+      <h1>Sierra MD Pairing Code</h1>
+      <p>Enter your phone number (e.g. 254712345678)</p>
+      <input type="text" id="phone" placeholder="254712345678">
+      <button onclick="generateCode()">Generate Code</button>
+      <div id="result"></div>
 
-  <script>
-    async function generateCode() {
-      const phone = document.getElementById('phone').value.trim();
-      const result = document.getElementById('result');
-      result.innerHTML = 'Generating pairing code...';
+      <script>
+        async function generateCode() {
+          const phone = document.getElementById('phone').value.trim();
+          const result = document.getElementById('result');
+          result.innerHTML = 'Generating...';
 
-      if (!phone.match(/^[0-9]{9,15}$/)) {
-        result.innerHTML = 'Invalid phone number';
-        return;
-      }
+          try {
+            const res = await fetch('/api/pair', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ phone })
+            });
+            const data = await res.json();
 
-      try {
-        const res = await fetch('/api/pair', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone })
-        });
-        const data = await res.json();
+            if (data.error) {
+              result.innerHTML = 'Error: ' + data.error;
+              return;
+            }
 
-        if (data.error) {
-          result.innerHTML = 'Error: ' + data.error;
-        } else {
-          result.innerHTML = 'Pairing Code: <strong>' + data.code + '</strong><br><br>' +
-            'Open WhatsApp → Settings → Linked Devices → Link with phone number<br>' +
-            'Enter the code above immediately (it expires quickly)';
+            result.innerHTML = 'Pairing Code: <strong>' + data.code + '</strong><br><br>' +
+              'Enter in WhatsApp > Linked Devices > Link with phone number<br>' +
+              'Waiting for pairing...';
+
+            // Poll for completion
+            const interval = setInterval(async () => {
+              const check = await fetch('/api/check?session=' + data.sessionId);
+              const checkData = await check.json();
+
+              if (checkData.status === 'complete') {
+                clearInterval(interval);
+                result.innerHTML += '<br>Success! SESSION_ID sent to your DM.';
+              } else if (checkData.status === 'error') {
+                clearInterval(interval);
+                result.innerHTML += '<br>Error: ' + checkData.error;
+              }
+            }, 3000);
+          } catch (err) {
+            result.innerHTML = 'Failed to generate code';
+          }
         }
-      } catch (err) {
-        result.innerHTML = 'Failed to connect. Try again.';
-      }
-    }
-  </script>
-</body>
-</html>
+      </script>
+    </body>
+    </html>
   `);
 });
 
-// API to generate pairing code
+// Start pairing
 app.post('/api/pair', async (req, res) => {
   const { phone } = req.body;
-  if (!phone || !/^\d{9,15}$/.test(phone)) {
-    return res.status(400).json({ error: 'Invalid phone number (9–15 digits, no +)' });
+  const phoneNum = pn('+' + phone);
+  if (!phoneNum.isValid()) {
+    return res.status(400).json({ error: 'Invalid phone number' });
   }
 
-  const sessionId = Date.now().toString();
-  const sessionPath = path.join(__dirname, 'temp_pair_auth');
+  const cleanPhone = phoneNum.getNumber('e164').replace('+', '');
+
+  const sessionId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
+  const sessionPath = path.join(__dirname, 'temp', `session_${sessionId}`);
 
   try {
     await fs.mkdir(sessionPath, { recursive: true });
@@ -88,34 +147,59 @@ app.post('/api/pair', async (req, res) => {
     const sock = makeWASocket({
       logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
-      browser: ['Sierra MD Pairing', 'Chrome', '120.0'],
+      browser: ['Sierra MD', 'Chrome', '120.0'],
       auth: state
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    const code = await sock.requestPairingCode(phone);
+    const code = await sock.requestPairingCode(cleanPhone);
 
+    res.json({ code: code.match(/.{1,4}/g)?.join('-') || code, sessionId });
+
+    // Wait for pairing completion
     sock.ev.on('connection.update', async (update) => {
-      if (update.connection === 'open') {
-        console.log('Pairing successful for', phone);
-        sock.end();
-        // Optional: keep session or clean up
-      }
-      if (update.connection === 'close') {
-        if (update.lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+      const { connection } = update;
+      if (connection === 'open') {
+        try {
+          const credsJson = await fs.readFile(path.join(sessionPath, 'creds.json'), 'utf-8');
+          const pasteUrl = await uploadToPastebin(credsJson);
+
+          const userJid = sock.user.id;
+          await sock.sendMessage(userJid, { text: MESSAGE + pasteUrl });
+
+          console.log('SESSION_ID sent to DM:', pasteUrl);
+        } catch (e) {
+          console.error('Error sending SESSION_ID:', e);
+        } finally {
           sock.end();
+          await fs.rm(sessionPath, { recursive: true, force: true });
         }
+      }
+      if (connection === 'close' && update.lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+        // Reconnect if not logged out
       }
     });
 
-    res.json({ code });
   } catch (err) {
-    console.error('Pairing error:', err.message);
-    res.status(500).json({ error: 'Failed to generate code. Try again.' });
+    await fs.rm(sessionPath, { recursive: true, force: true });
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Pairing server running on port ${port}`);
+// Check if pairing complete (for polling, if needed)
+app.get('/api/check', async (req, res) => {
+  const { session } = req.query;
+  if (!session) return res.status(400).json({ error: 'Missing session' });
+
+  const sessionPath = path.join(__dirname, 'temp', `session_${session}`);
+  const credsPath = path.join(sessionPath, 'creds.json');
+
+  if (await fs.access(credsPath).then(() => true).catch(() => false)) {
+    res.json({ status: 'complete' });
+  } else {
+    res.json({ status: 'waiting' });
+  }
 });
+
+app.listen(port, () => console.log(`Server on port ${port}`));
